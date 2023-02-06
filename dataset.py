@@ -19,7 +19,7 @@ class CaptionsDataset(torch.utils.data.Dataset):
         self._to_tensor_tf = transforms.ToTensor()
         self._images = {path: self._read_image(path) for path in self._image_paths}
         self._encoded_captions = self.encode(self._captions)
-        
+
     def _init_token_maps(self):
         tokens = set(''.join(self._captions))
         self._tokens = sorted(tokens)
@@ -45,14 +45,14 @@ class CaptionsDataset(torch.utils.data.Dataset):
         encoded_caption = self._encoded_captions[index]
         caption = self._captions[index]
         return (x, encoded_caption, caption, encoded_caption.shape[0])
-    
+
     def __len__(self):
         return len(self._image_paths)
 
     @property
     def idx_to_token(self):
         return self._idx_to_token
-    
+
     @property
     def token_to_idx(self):
         return self._token_to_idx

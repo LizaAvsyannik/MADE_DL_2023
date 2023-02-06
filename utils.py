@@ -27,7 +27,7 @@ def train_loop(model, loss_func, opt, scheduler, n_epoch, train_loader, val_load
 
             loss.backward()
             opt.step()
-            
+
             epoch_loss.append(loss.item())
 
         history.append(np.mean(epoch_loss))
@@ -42,7 +42,7 @@ def train_loop(model, loss_func, opt, scheduler, n_epoch, train_loader, val_load
                 input_lengths = torch.full((batch_imgs.shape[0],), logits.shape[0], dtype=torch.int32)
 
                 loss = loss_func(logits, labels, input_lengths, captions_lengths)
-                
+
                 val_losses.append(loss.item())
 
             val_history.append(np.mean(val_losses))
@@ -72,3 +72,22 @@ def eval_model(model, test_loader, device):
         captions_pred = test_loader.dataset.dataset.decode(preds)
         batch_errors.append(metric(batch_captions, captions_pred))
     return np.mean(batch_errors)
+
+
+@torch.no_grad()
+def analyze_errors(model, test_loader, device):
+    metric = CharErrorRate()
+    batch_errors = []
+    for batch_imgs, _, batch_captions, _ in test_loader:
+        logits = model(batch_imgs.to(device))
+        preds = logits.argmax(-1).T.detach().cpu().numpy()
+        captions_pred = test_loader.dataset.dataset.decode(preds)
+
+        captions_errors = [metric(b_c, c_p) for b_c, c_p in zip(batch_captions, captions_pred)]
+        max_erros_indices = np.argwhere(np.array(captions_errors) > 0).flatten()
+        batch_imgs_errors = batch_imgs[max_erros_indices]
+        batch_captions_errors = [batch_captions[i] for i in max_erros_indices]
+        captions_pred_errors = [captions_pred[i] for i in max_erros_indices]
+
+        batch_errors.append((batch_imgs_errors, batch_captions_errors, captions_pred_errors))
+    return batch_errors

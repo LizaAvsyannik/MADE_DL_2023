@@ -15,7 +15,7 @@ class ConvBlock(nn.Module):
         for _ in range(n_layers):
             layers.append(conv_activ(**repeated_convs_kwargs))
         self._block = nn.Sequential(*layers)
-    
+
     def forward(self, x):
         return self._block(x)
 
@@ -44,7 +44,7 @@ class OCRModel(nn.Module):
             nn.ReLU(),
             nn.LayerNorm([12, 128]),
             nn.Linear(128, n_output_classes))
-    
+
     def forward(self, x: torch.Tensor):
         conv_output = self._conv(x)
         conv_output = torch.flatten(conv_output, start_dim=1, end_dim=2)
