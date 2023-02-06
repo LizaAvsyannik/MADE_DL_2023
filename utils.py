@@ -4,80 +4,55 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from IPython.display import clear_output
-from PIL import Image
-from torchvision import transforms
+from torchmetrics import CharErrorRate
+from tqdm import tqdm
 
 
-class CaptionsDataset(torch.utils.data.Dataset):
-    def __init__(self, image_folder, transform=None):
-        self.image_folder = image_folder
-        self.transform = transform
-        self.image_paths = os.listdir(image_folder)
+def train_loop(model, loss_func, opt, scheduler, n_epoch, train_loader, val_loader, device, plot_every_epoch=True):
+    plt.ion()
 
-    def __getitem__(self, index):
-        image_path = os.path.join(self.image_folder, self.image_paths[index])
-        x = Image.open(image_path)
-        to_tensor = transforms.ToTensor()
-        x = to_tensor(x)
-
-        if x.shape[0] == 4:
-            assert torch.allclose(x[3], torch.ones([x.shape[1], x.shape[2]]))
-            x = x[:3]
-    
-        if self.transform is not None:
-            x = self.transform(x)
-        
-        caption = self.image_paths[index][:-4]
-        return (x, caption)
-    
-    def __len__(self):
-        return len(self.image_paths)
-
-
-def to_matrix(token_to_idx, sequences, max_len=None, dtype='int32'):    
-    max_len = max_len or max(map(len, sequences))
-    sequences_ix = np.zeros([len(sequences), max_len], dtype)
-
-    for i in range(len(sequences)):
-        line_ix = [token_to_idx[c] for c in sequences[i]]
-        sequences_ix[i, :len(sequences[i])] = line_ix
-
-    return sequences_ix
-
-
-def to_caption(idx_to_token, sequences, blank_idx=0):    
-    captions = []
-
-    for i in range(len(sequences)):
-        caption_ix = ''.join([idx_to_token[c] for c in sequences[i] if c != blank_idx])
-        captions.append(caption_ix)
-
-    return captions
-
-
-def train_loop(model, loss_func, opt, n_epoch, token_to_idx, train_loader, device):
     history = []
-    for i in range(n_epoch):
+    val_history = []
+    for i in tqdm(range(n_epoch), position=0):
         epoch_loss = []
-        for batch_imgs, batch_captions in train_loader:
-            labels = torch.tensor(to_matrix(token_to_idx, batch_captions), dtype=torch.int32).to(device)
-            logits = model(batch_imgs.to(device)).permute(1, 0, 2)
+        for batch_imgs, batch_captions_encoded, _, captions_lengths in tqdm(
+            train_loader, position=1, desc='train', leave=False
+        ):
+            opt.zero_grad()
+            labels = batch_captions_encoded.to(device)
+            logits = model(batch_imgs.to(device))
             input_lengths = torch.full((batch_imgs.shape[0],), logits.shape[0], dtype=torch.int32)
-            target_lengths = torch.full((batch_imgs.shape[0],), labels.shape[1], dtype=torch.int32)
 
-            # print(labels.shape, logits.shape, input_lengths[0], target_lengths[0])
-            loss = loss_func(logits.log_softmax(-1), labels, input_lengths, target_lengths)
+            loss = loss_func(logits, labels, input_lengths, captions_lengths)
 
             loss.backward()
             opt.step()
-            opt.zero_grad()
             
             epoch_loss.append(loss.item())
 
-        history.append(sum(epoch_loss) / len(epoch_loss))
-        if (i + 1) % 10 == 0:
-            clear_output(True)
-            plt.plot(history, label='Loss')
+        history.append(np.mean(epoch_loss))
+
+        with torch.no_grad():
+            val_losses = []
+            for batch_imgs, batch_captions_encoded, _, captions_lengths in tqdm(
+                val_loader, position=2, desc='val', leave=False
+            ):
+                labels = batch_captions_encoded.to(device)
+                logits = model(batch_imgs.to(device))
+                input_lengths = torch.full((batch_imgs.shape[0],), logits.shape[0], dtype=torch.int32)
+
+                loss = loss_func(logits, labels, input_lengths, captions_lengths)
+                
+                val_losses.append(loss.item())
+
+            val_history.append(np.mean(val_losses))
+
+        scheduler.step(val_history[-1])
+
+        if i + 1 == n_epoch or plot_every_epoch:
+            clear_output(wait=True)
+            plt.plot(history, label='Train')
+            plt.plot(val_history, label='Val')
             plt.xlabel('Epoch')
             plt.ylabel('Loss')
             plt.legend()
@@ -87,3 +62,13 @@ def train_loop(model, loss_func, opt, n_epoch, token_to_idx, train_loader, devic
     print(f'Final Loss: {history[-1]}')
 
 
+@torch.no_grad()
+def eval_model(model, test_loader, device):
+    metric = CharErrorRate()
+    batch_errors = []
+    for batch_imgs, _, batch_captions, _ in test_loader:
+        logits = model(batch_imgs.to(device))
+        preds = logits.argmax(-1).T.detach().cpu().numpy()
+        captions_pred = test_loader.dataset.dataset.decode(preds)
+        batch_errors.append(metric(batch_captions, captions_pred))
+    return np.mean(batch_errors)
